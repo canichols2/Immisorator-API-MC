@@ -1,5 +1,6 @@
 using System;
 using System.Net;
+using System.Net.Http;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using McAzureFunctionController.DB_Extensions;
@@ -11,7 +12,9 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Azure.WebJobs.Extensions.OpenApi.Core.Attributes;
+using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi.Models;
+using Newtonsoft.Json.Linq;
 
 namespace McAzureFunctionController;
 public class MinecraftServerInstanceStatusesRestAPI
@@ -91,5 +94,33 @@ public class MinecraftServerInstanceStatusesRestAPI
         }
     }
 
-}
+    [FunctionName(nameof(CheckMinecraftServerStatus))]
+    public async Task CheckMinecraftServerStatus(
+        [TimerTrigger("0 */5 * * * *")] TimerInfo myTimer,
+        [CosmosDB(Connection = "ConnectionStrings:Cosmos")] CosmosClient dbClient,
+        ILogger log)
+    {
+        var serverAddress = "vh.immisorator.com";
+        var url = $"https://api.mcsrvstat.us/3/{serverAddress}";
 
+        using (var httpClient = new HttpClient())
+        {
+            var response = await httpClient.GetStringAsync(url);
+            var jsonResponse = JObject.Parse(response);
+
+            var status = jsonResponse["online"].Value<bool>() ? MinecraftServerStatus.Statuses.Online : MinecraftServerStatus.Statuses.Offline;
+            var playerCount = jsonResponse["players"]["online"].Value<int>();
+
+            var serverStatus = new MinecraftServerStatus
+            {
+                ServerId = Guid.NewGuid(), // Replace with actual server ID
+                Status = status,
+                OnlinePlayers = jsonResponse["players"]["list"].ToObject<List<string>>()
+            };
+
+            await dbClient.AddOrUpdateServerStatus(serverStatus);
+
+            // TODO: Send Discord update with status and player count if Cosmos DB update does not trigger it
+        }
+    }
+}
